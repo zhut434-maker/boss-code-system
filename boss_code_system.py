@@ -4,31 +4,37 @@ import random
 from datetime import datetime, timedelta
 from streamlit_cookies_manager import EncryptedCookieManager
 
-# -------------------------- 1. 页面配置（必须是第一个Streamlit命令） --------------------------
+# -------------------------- 1. 页面配置（必须是第一个Streamlit命令，绝对不能改顺序） --------------------------
 st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
 
-# -------------------------- 2. Cookie管理器初始化（页面最顶端，优先执行） --------------------------
-cookies = EncryptedCookieManager(
-    prefix="boss_code_final_v2_",  # 全新前缀，彻底清除旧Cookie残留
-    password="final_secure_pwd_v2_123456"
-)
-# 等待Cookie完全加载，不然后续操作会失效
-if not cookies.ready():
-    st.stop()
-
-# -------------------------- 3. 核心：退出登录逻辑（优先于所有渲染/状态初始化） --------------------------
-# 先判断是否点击了退出按钮，优先处理
-if st.session_state.get("logout_clicked", False):
-    # 第一步：强制清除所有Cookie
-    for key in list(cookies.keys()):
-        del cookies[key]
-    cookies.save()  # 立即写入浏览器，确保清除生效
-    # 第二步：完全清空所有会话状态
+# -------------------------- 2. 核心：退出登录逻辑（页面第二顺位，所有其他代码之前执行） --------------------------
+# 只要URL里有logout=1，立即强制退出，绝对优先执行
+if "logout" in st.query_params:
+    # 初始化Cookie管理器（必须先初始化才能操作）
+    cookies = EncryptedCookieManager(
+        prefix="boss_code_final_v3_",
+        password="final_secure_pwd_v3_987654"
+    )
+    if cookies.ready():
+        # 第一步：强制删除所有Cookie，一个不留
+        for key in list(cookies.keys()):
+            del cookies[key]
+        cookies.save()  # 立即写入浏览器，确保清除生效
+    # 第二步：完全清空所有会话状态，彻底销毁登录痕迹
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    # 第三步：强制设置未登录状态，确保渲染登录页
-    st.session_state.logged_in = False
-    st.session_state.logout_clicked = False
+    # 第三步：删除URL里的logout参数，避免循环触发
+    del st.query_params["logout"]
+    # 第四步：强制刷新页面，直接渲染登录页
+    st.rerun()
+
+# -------------------------- 3. Cookie管理器初始化（正常流程） --------------------------
+cookies = EncryptedCookieManager(
+    prefix="boss_code_final_v3_",
+    password="final_secure_pwd_v3_987654"
+)
+if not cookies.ready():
+    st.stop()
 
 # -------------------------- 4. 数据库初始化 --------------------------
 def init_db():
@@ -110,7 +116,7 @@ if not st.session_state.logged_in:
 # -------------------------- 6. 页面标题 --------------------------
 st.title("🎮 Boss码自助领取系统")
 
-# -------------------------- 7. 核心渲染分支：要么登录页，要么已登录页，无中间状态 --------------------------
+# -------------------------- 7. 渲染分支：要么登录页，要么已登录页，无中间状态 --------------------------
 # 未登录状态：只渲染登录/注册/忘记密码
 if not st.session_state.logged_in:
     tab1, tab2, tab3 = st.tabs(["用户登录", "账号注册", "忘记密码"])
@@ -139,7 +145,7 @@ if not st.session_state.logged_in:
                 st.session_state.username = user[1]
                 st.session_state.permission_level = user[3]
                 st.success("登录成功！")
-                st.rerun()  # 这里rerun安全，因为是在未登录分支，不会白屏
+                st.rerun()
             else:
                 st.error("账号或密码错误")
     
@@ -190,16 +196,16 @@ if not st.session_state.logged_in:
 
 # 已登录状态：只渲染系统内容
 else:
-    # 顶部用户信息 + 退出按钮（直接设置标志位，无回调）
+    # 顶部用户信息 + 退出按钮（核心：点击直接改URL参数，强制触发退出）
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
-        # 核心：点击按钮只设置标志位，下一次页面加载时优先处理退出
-        if st.button("退出登录", use_container_width=True, key="logout_btn"):
-            st.session_state.logout_clicked = True
-            st.rerun()  # 立即刷新，触发最顶端的退出逻辑
+        # 核心：点击按钮直接给URL加logout=1，触发最顶端的退出逻辑，100%生效
+        if st.button("退出登录", use_container_width=True, key="final_logout_btn"):
+            st.query_params["logout"] = "1"
+            st.rerun()
     
     st.divider()
 
