@@ -4,37 +4,33 @@ import random
 from datetime import datetime, timedelta
 from streamlit_cookies_manager import EncryptedCookieManager
 
-# -------------------------- 配置初始化 --------------------------
-# 权限等级定义
-PERMISSION_USER = 0       # 普通用户
-PERMISSION_SUB_ADMIN = 1  # 次级管理员
-PERMISSION_SUPER_ADMIN = 2# 超级管理员
+# -------------------------- 1. 页面配置（必须是第一个Streamlit命令） --------------------------
+st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
 
-# ========== 1. Cookie管理器初始化（页面最顶部） ==========
+# -------------------------- 2. Cookie管理器初始化（页面最顶端，优先执行） --------------------------
 cookies = EncryptedCookieManager(
-    prefix="boss_code_final_",
-    password="final_secure_pwd_987654321"
+    prefix="boss_code_final_v2_",  # 全新前缀，彻底清除旧Cookie残留
+    password="final_secure_pwd_v2_123456"
 )
+# 等待Cookie完全加载，不然后续操作会失效
 if not cookies.ready():
     st.stop()
 
-# ========== 2. 核心：退出登录逻辑（用标志位控制，不在回调里rerun） ==========
-# 初始化退出标志位
-if "do_logout" not in st.session_state:
-    st.session_state.do_logout = False
-
-# 页面最前面先检查是否要退出
-if st.session_state.do_logout:
-    # 第一步：强制删除所有Cookie
+# -------------------------- 3. 核心：退出登录逻辑（优先于所有渲染/状态初始化） --------------------------
+# 先判断是否点击了退出按钮，优先处理
+if st.session_state.get("logout_clicked", False):
+    # 第一步：强制清除所有Cookie
     for key in list(cookies.keys()):
         del cookies[key]
-    cookies.save()
-    # 第二步：清空所有会话状态
-    st.session_state.clear()
-    # 第三步：强制刷新页面（在主流程里，不在回调里）
-    st.rerun()
+    cookies.save()  # 立即写入浏览器，确保清除生效
+    # 第二步：完全清空所有会话状态
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    # 第三步：强制设置未登录状态，确保渲染登录页
+    st.session_state.logged_in = False
+    st.session_state.logout_clicked = False
 
-# ========== 3. 数据库初始化 ==========
+# -------------------------- 4. 数据库初始化 --------------------------
 def init_db():
     conn = sqlite3.connect("boss_code_system.db", check_same_thread=False)
     c = conn.cursor()
@@ -67,9 +63,10 @@ def init_db():
             receive_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # 初始化默认管理员
     try:
         c.execute("INSERT INTO users (username, password, permission_level, remain_receive_times) VALUES (?, ?, ?, ?)",
-                  ("admin", "admin123", PERMISSION_SUPER_ADMIN, 9999))
+                  ("admin", "admin123", 2, 9999))
     except:
         pass
     conn.commit()
@@ -95,30 +92,26 @@ def parse_boss_code_txt(file_content):
 conn = init_db()
 c = conn.cursor()
 
-# ========== 4. 登录状态初始化（完全以Cookie为准） ==========
+# -------------------------- 5. 登录状态初始化（完全以Cookie为准） --------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = 0
     st.session_state.username = ""
-    st.session_state.permission_level = PERMISSION_USER
+    st.session_state.permission_level = 0
 
-# 从Cookie同步登录状态
-if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
-    st.session_state.logged_in = True
-    st.session_state.user_id = int(cookies["user_id"])
-    st.session_state.username = cookies["username"]
-    st.session_state.permission_level = int(cookies["permission_level"])
-else:
-    st.session_state.logged_in = False
-    st.session_state.user_id = 0
-    st.session_state.username = ""
-    st.session_state.permission_level = PERMISSION_USER
+# 从Cookie同步登录状态（唯一可信来源）
+if not st.session_state.logged_in:
+    if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
+        st.session_state.logged_in = True
+        st.session_state.user_id = int(cookies["user_id"])
+        st.session_state.username = cookies["username"]
+        st.session_state.permission_level = int(cookies["permission_level"])
 
-# -------------------------- 页面配置 --------------------------
-st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
+# -------------------------- 6. 页面标题 --------------------------
 st.title("🎮 Boss码自助领取系统")
 
-# ========== 5. 未登录状态：登录/注册/忘记密码 ==========
+# -------------------------- 7. 核心渲染分支：要么登录页，要么已登录页，无中间状态 --------------------------
+# 未登录状态：只渲染登录/注册/忘记密码
 if not st.session_state.logged_in:
     tab1, tab2, tab3 = st.tabs(["用户登录", "账号注册", "忘记密码"])
     
@@ -132,6 +125,7 @@ if not st.session_state.logged_in:
             c.execute("SELECT id, username, password, permission_level FROM users WHERE username = ?", (username,))
             user = c.fetchone()
             if user and password == user[2]:
+                # 写入Cookie
                 if remember_me:
                     expires = datetime.now() + timedelta(days=7)
                     cookies["user_id"] = str(user[0])
@@ -139,12 +133,13 @@ if not st.session_state.logged_in:
                     cookies["permission_level"] = str(user[3])
                     cookies.expires = expires
                     cookies.save()
+                # 同步会话状态
                 st.session_state.logged_in = True
                 st.session_state.user_id = user[0]
                 st.session_state.username = user[1]
                 st.session_state.permission_level = user[3]
-                st.success("登录成功！正在跳转...")
-                st.rerun()
+                st.success("登录成功！")
+                st.rerun()  # 这里rerun安全，因为是在未登录分支，不会白屏
             else:
                 st.error("账号或密码错误")
     
@@ -193,18 +188,18 @@ if not st.session_state.logged_in:
                     conn.commit()
                     st.success(f"用户【{reset_username}】的密码重置成功！请返回登录页使用新密码登录")
 
-# ========== 6. 已登录状态 ==========
+# 已登录状态：只渲染系统内容
 else:
-    # 顶部用户信息 + 退出按钮（设置标志位，不直接rerun）
+    # 顶部用户信息 + 退出按钮（直接设置标志位，无回调）
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
-        # 核心：点击按钮只设置标志位，不执行退出逻辑
+        # 核心：点击按钮只设置标志位，下一次页面加载时优先处理退出
         if st.button("退出登录", use_container_width=True, key="logout_btn"):
-            st.session_state.do_logout = True
-            st.rerun()
+            st.session_state.logout_clicked = True
+            st.rerun()  # 立即刷新，触发最顶端的退出逻辑
     
     st.divider()
 
@@ -342,7 +337,7 @@ else:
                             u = c.fetchone()
                             if not u:
                                 st.error("该用户名不存在！")
-                            elif u[2] == PERMISSION_SUPER_ADMIN and st.session_state.permission_level != PERMISSION_SUPER_ADMIN:
+                            elif u[2] == 2 and st.session_state.permission_level != 2:
                                 st.error("次级管理员无权修改超级管理员的密码")
                             else:
                                 c.execute("UPDATE users SET password = ? WHERE username = ?", (admin_new_pwd, reset_uname))
@@ -359,7 +354,7 @@ else:
                             u = c.fetchone()
                             if not u:
                                 st.error("该ID的用户不存在！")
-                            elif u[2] == PERMISSION_SUPER_ADMIN and st.session_state.permission_level != PERMISSION_SUPER_ADMIN:
+                            elif u[2] == 2 and st.session_state.permission_level != 2:
                                 st.error("次级管理员无权修改超级管理员的密码")
                             else:
                                 c.execute("UPDATE users SET password = ? WHERE id = ?", (admin_new_pwd, reset_uid))
@@ -400,8 +395,8 @@ else:
                         c.execute("""
                             UPDATE users 
                             SET remain_receive_times=? 
-                            WHERE id BETWEEN ? AND ? AND permission_level != ?
-                        """, (reset_batch_times, reset_start_id, reset_end_id, PERMISSION_SUPER_ADMIN))
+                            WHERE id BETWEEN ? AND ? AND permission_level != 2
+                        """, (reset_batch_times, reset_start_id, reset_end_id))
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量重置完成！共重置 {affected} 个用户的领取次数为 {reset_batch_times} 次")
@@ -448,8 +443,8 @@ else:
                             c.execute("""
                                 SELECT COUNT(*) FROM users 
                                 WHERE id BETWEEN ? AND ? 
-                                AND permission_level != ?
-                            """, (del_user_start_id, del_user_end_id, PERMISSION_SUPER_ADMIN))
+                                AND permission_level != 2
+                            """, (del_user_start_id, del_user_end_id))
                             count = c.fetchone()[0]
                             if count == 0:
                                 st.error("该ID范围内无普通用户/次级管理员可删除！")
@@ -458,8 +453,8 @@ else:
                                 c.execute("""
                                     DELETE FROM users 
                                     WHERE id BETWEEN ? AND ? 
-                                    AND permission_level != ?
-                                """, (del_user_start_id, del_user_end_id, PERMISSION_SUPER_ADMIN))
+                                    AND permission_level != 2
+                                """, (del_user_start_id, del_user_end_id))
                                 conn.commit()
                                 st.success(f"批量删除完成！共删除 {count} 个用户，并清理了其所有领取记录")
 
@@ -481,8 +476,8 @@ else:
                         c.execute("""
                             UPDATE users 
                             SET remain_receive_times = ? 
-                            WHERE id BETWEEN ? AND ? AND permission_level != ?
-                        """, (batch_remain_times, start_id, end_id, PERMISSION_SUPER_ADMIN))
+                            WHERE id BETWEEN ? AND ? AND permission_level != 2
+                        """, (batch_remain_times, start_id, end_id))
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
@@ -510,8 +505,8 @@ else:
                             c.execute(f"""
                                 UPDATE users 
                                 SET remain_receive_times = ? 
-                                WHERE id IN ({id_placeholders}) AND permission_level != ?
-                            """, [batch_remain_times] + id_list + [PERMISSION_SUPER_ADMIN])
+                                WHERE id IN ({id_placeholders}) AND permission_level != 2
+                            """, [batch_remain_times] + id_list)
                             affected = conn.total_changes
                             conn.commit()
                             st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
@@ -547,7 +542,7 @@ else:
                 target_user_id = st.number_input("目标用户ID", min_value=1, step=1, key="perm_modify_uid")
                 target_permission = st.selectbox(
                     "设置用户权限",
-                    options=[("普通用户", PERMISSION_USER), ("次级管理员", PERMISSION_SUB_ADMIN)],
+                    options=[("普通用户", 0), ("次级管理员", 1)],
                     format_func=lambda x: x[0],
                     key="perm_modify_level"
                 )
@@ -570,7 +565,7 @@ else:
                 admin_list = c.fetchall()
                 admin_data = []
                 for admin in admin_list:
-                    role = "超级管理员" if admin[2] == PERMISSION_SUPER_ADMIN else "次级管理员"
+                    role = "超级管理员" if admin[2] == 2 else "次级管理员"
                     admin_data.append([admin[0], admin[1], role, admin[3]])
                 st.dataframe(admin_data, use_container_width=True, key="admin_list_df")
 
