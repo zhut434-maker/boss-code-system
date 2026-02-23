@@ -54,23 +54,18 @@ def init_db():
 # 统一解析Boss码（支持空格/换行分隔，过滤5位有效码）
 def parse_boss_codes(content):
     code_list = []
-    # 先按换行拆分每行
     lines = content.split("\n")
     for line in lines:
-        # 按空格拆分每行的码
         codes_in_line = line.strip().split()
         for code in codes_in_line:
             code = code.strip()
-            # 只保留5位的字母/数字组合
             if len(code) == 5 and code.isalnum():
                 code_list.append(code)
-    # 自动去重
     code_list = list(set(code_list))
     return code_list
 
 # 解析TXT文件
 def parse_boss_code_txt(file_content):
-    # 把TXT内容转成字符串，复用上面的统一解析逻辑
     content = file_content.decode("utf-8")
     return parse_boss_codes(content)
 
@@ -163,7 +158,7 @@ else:
 
             st.divider()
 
-            # 2. 恢复手动粘贴导入（支持空格分隔格式）
+            # 2. 手动粘贴导入
             st.subheader("📝 手动粘贴导入Boss码（空格分隔）")
             st.caption("支持格式：xxxxx xxxxx xxxxx（空格分隔）、一行一个、换行+空格混合，自动过滤无效码、自动去重")
             code_input = st.text_area("粘贴Boss码内容", height=200, key="paste_code_input")
@@ -171,7 +166,6 @@ else:
                 if not code_input.strip():
                     st.warning("请粘贴Boss码内容")
                 else:
-                    # 用统一的解析逻辑，支持空格/换行分隔
                     codes = parse_boss_codes(code_input)
                     if not codes:
                         st.error("未解析到有效Boss码（仅支持5位字母/数字组合）")
@@ -245,23 +239,54 @@ else:
                 c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
             st.dataframe(c.fetchall(), use_container_width=True, key="code_list_df")
 
-        # ========== 用户管理 ==========
+        # ========== 用户管理（新增重置领取次数功能） ==========
         with tabs[1]:
             st.subheader("用户列表")
             c.execute("SELECT id, username, permission_level, remain_receive_times, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
             st.dataframe(users, use_container_width=True, key="user_list_df")
 
-            # 修改密码（超级管理员可用）
-            if st.session_state.permission_level == 2:
+            # 新增：重置用户领取次数功能
+            if st.session_state.permission_level >= 1:
                 st.divider()
-                st.subheader("🔐 修改任意用户密码（含管理员）")
-                uid = st.number_input("要修改的用户ID", min_value=1, key="pwd_modify_uid")
-                new_pwd = st.text_input("新密码", type="password", key="pwd_modify_new")
-                if st.button("设置新密码", use_container_width=True, key="pwd_modify_btn"):
-                    c.execute("UPDATE users SET password=? WHERE id=?", (new_pwd, uid))
-                    conn.commit()
-                    st.success("密码已修改！")
+                st.subheader("🔄 重置用户领取次数")
+                reset_type = st.radio("选择重置方式", ["单个用户重置", "批量用户重置（按ID范围）"], horizontal=True, key="reset_type")
+                
+                if reset_type == "单个用户重置":
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        reset_uid = st.number_input("要重置的用户ID", min_value=1, step=1, key="reset_uid")
+                    with col2:
+                        reset_times = st.number_input("重置为多少次", min_value=0, step=1, value=10, key="reset_times")
+                    if st.button("执行单个重置", type="primary", use_container_width=True, key="reset_single_btn"):
+                        c.execute("SELECT username FROM users WHERE id=?", (reset_uid,))
+                        u = c.fetchone()
+                        if not u:
+                            st.error("该ID的用户不存在！")
+                        else:
+                            c.execute("UPDATE users SET remain_receive_times=? WHERE id=?", (reset_times, reset_uid))
+                            conn.commit()
+                            st.success(f"成功重置用户【{u[0]}】的领取次数为 {reset_times} 次！")
+                else:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        reset_start_id = st.number_input("起始用户ID", min_value=1, step=1, value=1, key="reset_start_id")
+                    with col2:
+                        reset_end_id = st.number_input("结束用户ID", min_value=1, step=1, value=10, key="reset_end_id")
+                    with col3:
+                        reset_batch_times = st.number_input("重置为多少次", min_value=0, step=1, value=10, key="reset_batch_times")
+                    if st.button("执行批量重置", type="primary", use_container_width=True, key="reset_batch_btn"):
+                        if reset_start_id > reset_end_id:
+                            st.error("起始ID不能大于结束ID！")
+                        else:
+                            c.execute("""
+                                UPDATE users 
+                                SET remain_receive_times=? 
+                                WHERE id BETWEEN ? AND ? AND permission_level != ?
+                            """, (reset_batch_times, reset_start_id, reset_end_id, PERMISSION_SUPER_ADMIN))
+                            affected = conn.total_changes
+                            conn.commit()
+                            st.success(f"批量重置完成！共重置 {affected} 个用户的领取次数为 {reset_batch_times} 次")
 
             st.divider()
             st.subheader("🗑️ 用户删除管理（仅超管）")
@@ -445,29 +470,51 @@ else:
                     admin_data.append([admin[0], admin[1], role, admin[3]])
                 st.dataframe(admin_data, use_container_width=True, key="admin_list_df")
 
-    # ========== 普通用户领码界面 ==========
+    # ========== 普通用户领码界面（改为一次性领取最大值） ==========
     st.header("🎁 Boss码自助领取")
     c.execute("SELECT remain_receive_times FROM users WHERE id=?", (st.session_state.user_id,))
     rt = c.fetchone()[0]
     st.metric("剩余可领取次数", rt)
 
-    if st.button("点击领取Boss码", type="primary", use_container_width=True, disabled=rt <= 0, key="receive_code_btn"):
+    if st.button("一次性领取所有Boss码", type="primary", use_container_width=True, disabled=rt <= 0, key="receive_all_btn"):
+        # 先查库存
         c.execute("SELECT id, code FROM boss_codes WHERE is_used = 0")
         available_codes = c.fetchall()
+        
         if not available_codes:
             st.error("当前Boss码已领完，请联系管理员补充库存")
+        elif len(available_codes) < rt:
+            st.warning(f"库存不足！当前仅剩 {len(available_codes)} 个码，已为你全部领取")
+            num_to_receive = len(available_codes)
         else:
-            selected_code = random.choice(available_codes)
-            code_id = selected_code[0]
-            code = selected_code[1]
-            c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
-                      (st.session_state.user_id, datetime.now(), code_id))
-            c.execute("UPDATE users SET remain_receive_times = remain_receive_times - 1 WHERE id = ?", (st.session_state.user_id,))
-            c.execute("INSERT INTO receive_records (user_id, code_id, code) VALUES (?, ?, ?)",
-                      (st.session_state.user_id, code_id, code))
+            num_to_receive = rt
+        
+        # 开始领取
+        if num_to_receive > 0:
+            # 随机选码
+            selected_codes = random.sample(available_codes, num_to_receive)
+            received_code_list = []
+            
+            for code_info in selected_codes:
+                code_id = code_info[0]
+                code = code_info[1]
+                
+                # 更新码状态
+                c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
+                          (st.session_state.user_id, datetime.now(), code_id))
+                # 插入领取记录
+                c.execute("INSERT INTO receive_records (user_id, code_id, code) VALUES (?, ?, ?)",
+                          (st.session_state.user_id, code_id, code))
+                received_code_list.append(code)
+            
+            # 更新用户剩余次数
+            c.execute("UPDATE users SET remain_receive_times = 0 WHERE id = ?", (st.session_state.user_id,))
             conn.commit()
-            st.success("领取成功！你的Boss码如下：")
-            st.code(code, language="text")
+            
+            # 显示结果
+            st.success(f"领取成功！共领取 {len(received_code_list)} 个Boss码：")
+            for i, code in enumerate(received_code_list, 1):
+                st.code(f"{i}. {code}", language="text")
             st.warning("请妥善保管，每个码仅可使用一次")
     
     st.divider()
@@ -477,5 +524,4 @@ else:
     if my_records:
         st.dataframe(my_records, use_container_width=True, key="my_record_df")
     else:
-
         st.info("你还没有领取过Boss码")
