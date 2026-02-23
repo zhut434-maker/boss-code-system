@@ -12,23 +12,26 @@ PERMISSION_SUPER_ADMIN = 2# 超级管理员
 
 # ========== 1. Cookie管理器初始化（页面最顶部） ==========
 cookies = EncryptedCookieManager(
-    prefix="boss_code_final_",  # 换前缀，避免旧Cookie残留
-    password="final_secure_pwd_987654321"  # 换加密密码
+    prefix="boss_code_final_",
+    password="final_secure_pwd_987654321"
 )
-# 必须等Cookie加载完成再执行后续所有代码
 if not cookies.ready():
     st.stop()
 
-# ========== 2. 核心：退出登录回调函数（优先执行） ==========
-def logout():
+# ========== 2. 核心：退出登录逻辑（用标志位控制，不在回调里rerun） ==========
+# 初始化退出标志位
+if "do_logout" not in st.session_state:
+    st.session_state.do_logout = False
+
+# 页面最前面先检查是否要退出
+if st.session_state.do_logout:
     # 第一步：强制删除所有Cookie
     for key in list(cookies.keys()):
         del cookies[key]
-    # 立即保存，强制写入浏览器
     cookies.save()
     # 第二步：清空所有会话状态
     st.session_state.clear()
-    # 第三步：强制刷新页面
+    # 第三步：强制刷新页面（在主流程里，不在回调里）
     st.rerun()
 
 # ========== 3. 数据库初始化 ==========
@@ -64,7 +67,6 @@ def init_db():
             receive_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 初始化默认管理员
     try:
         c.execute("INSERT INTO users (username, password, permission_level, remain_receive_times) VALUES (?, ?, ?, ?)",
                   ("admin", "admin123", PERMISSION_SUPER_ADMIN, 9999))
@@ -94,21 +96,19 @@ conn = init_db()
 c = conn.cursor()
 
 # ========== 4. 登录状态初始化（完全以Cookie为准） ==========
-# 先清空无效的登录状态
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = 0
     st.session_state.username = ""
     st.session_state.permission_level = PERMISSION_USER
 
-# 从Cookie同步登录状态（唯一可信来源）
+# 从Cookie同步登录状态
 if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
     st.session_state.logged_in = True
     st.session_state.user_id = int(cookies["user_id"])
     st.session_state.username = cookies["username"]
     st.session_state.permission_level = int(cookies["permission_level"])
 else:
-    # Cookie不存在，强制设为未登录
     st.session_state.logged_in = False
     st.session_state.user_id = 0
     st.session_state.username = ""
@@ -129,11 +129,9 @@ if not st.session_state.logged_in:
         remember_me = st.checkbox("记住我7天内免登录", value=True, key="remember_me")
         
         if st.button("登录", use_container_width=True, key="login_btn"):
-            # 校验用户
             c.execute("SELECT id, username, password, permission_level FROM users WHERE username = ?", (username,))
             user = c.fetchone()
             if user and password == user[2]:
-                # 登录成功，写入Cookie
                 if remember_me:
                     expires = datetime.now() + timedelta(days=7)
                     cookies["user_id"] = str(user[0])
@@ -141,12 +139,10 @@ if not st.session_state.logged_in:
                     cookies["permission_level"] = str(user[3])
                     cookies.expires = expires
                     cookies.save()
-                # 同步到会话
                 st.session_state.logged_in = True
                 st.session_state.user_id = user[0]
                 st.session_state.username = user[1]
                 st.session_state.permission_level = user[3]
-                
                 st.success("登录成功！正在跳转...")
                 st.rerun()
             else:
@@ -199,14 +195,16 @@ if not st.session_state.logged_in:
 
 # ========== 6. 已登录状态 ==========
 else:
-    # 顶部用户信息 + 退出按钮（绑定回调函数）
+    # 顶部用户信息 + 退出按钮（设置标志位，不直接rerun）
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
-        # 核心：退出按钮绑定logout回调函数，点击时优先执行
-        st.button("退出登录", use_container_width=True, key="logout_btn", on_click=logout)
+        # 核心：点击按钮只设置标志位，不执行退出逻辑
+        if st.button("退出登录", use_container_width=True, key="logout_btn"):
+            st.session_state.do_logout = True
+            st.rerun()
     
     st.divider()
 
