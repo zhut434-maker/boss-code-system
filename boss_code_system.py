@@ -1,14 +1,24 @@
 import streamlit as st
 import sqlite3
 import random
-from datetime import datetime
-import os
+from datetime import datetime, timedelta
+from streamlit_cookies_manager import EncryptedCookieManager
 
 # -------------------------- 配置初始化 --------------------------
 # 权限等级定义
 PERMISSION_USER = 0       # 普通用户
 PERMISSION_SUB_ADMIN = 1  # 次级管理员
 PERMISSION_SUPER_ADMIN = 2# 超级管理员
+
+# ========== 核心：Cookie持久化登录配置 ==========
+# 初始化加密Cookie管理器，密码随便设，用于加密Cookie
+cookies = EncryptedCookieManager(
+    prefix="boss_code_system_",
+    password="your_secure_password_123456"  # 可以改成你自己的密码
+)
+# 等待Cookie加载完成
+if not cookies.ready():
+    st.stop()
 
 # 数据库初始化
 def init_db():
@@ -73,12 +83,21 @@ def parse_boss_code_txt(file_content):
 conn = init_db()
 c = conn.cursor()
 
-# 登录状态
+# ========== 页面初始化：从Cookie自动恢复登录状态 ==========
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.session_state.user_id = 0
-    st.session_state.permission_level = PERMISSION_USER
+    # 先从Cookie里读取用户信息
+    if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
+        # 自动填充到session_state，保持登录
+        st.session_state.logged_in = True
+        st.session_state.user_id = int(cookies["user_id"])
+        st.session_state.username = cookies["username"]
+        st.session_state.permission_level = int(cookies["permission_level"])
+    else:
+        # 没有Cookie，初始化未登录状态
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.user_id = 0
+        st.session_state.permission_level = PERMISSION_USER
 
 # -------------------------- 页面 --------------------------
 st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
@@ -90,15 +109,29 @@ if not st.session_state.logged_in:
     with tab1:
         username = st.text_input("用户名", key="login_username")
         password = st.text_input("密码", type="password", key="login_password")
+        # 记住登录选项
+        remember_me = st.checkbox("记住我7天内免登录", value=True, key="remember_me")
         if st.button("登录", use_container_width=True, key="login_btn"):
             c.execute("SELECT id, username, password, permission_level FROM users WHERE username = ?", (username,))
             user = c.fetchone()
             if user and password == user[2]:
+                # 登录成功，填充session_state
                 st.session_state.logged_in = True
-                st.session_state.username = user[1]
                 st.session_state.user_id = user[0]
+                st.session_state.username = user[1]
                 st.session_state.permission_level = user[3]
-                st.success("登录成功")
+                
+                # ========== 核心：把用户信息写入Cookie，持久化登录 ==========
+                if remember_me:
+                    # 设置7天有效期
+                    expires = datetime.now() + timedelta(days=7)
+                    cookies["user_id"] = str(user[0])
+                    cookies["username"] = user[1]
+                    cookies["permission_level"] = str(user[3])
+                    cookies.expires = expires
+                    cookies.save()
+                
+                st.success("登录成功！正在跳转...")
                 st.rerun()
             else:
                 st.error("账号或密码错误")
@@ -113,7 +146,7 @@ if not st.session_state.logged_in:
                 try:
                     c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (new_username, new_password))
                     conn.commit()
-                    st.success("注册成功！请登录")
+                    st.success("注册成功！请返回登录")
                 except:
                     st.error("用户名已存在")
 
@@ -125,6 +158,10 @@ else:
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
         if st.button("退出登录", use_container_width=True, key="logout_btn"):
+            # ========== 退出登录：清空Cookie和session_state ==========
+            for key in cookies.keys():
+                del cookies[key]
+            cookies.save()
             st.session_state.clear()
             st.rerun()
     st.divider()
@@ -239,14 +276,14 @@ else:
                 c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
             st.dataframe(c.fetchall(), use_container_width=True, key="code_list_df")
 
-        # ========== 用户管理（新增重置领取次数功能） ==========
+        # ========== 用户管理 ==========
         with tabs[1]:
             st.subheader("用户列表")
             c.execute("SELECT id, username, permission_level, remain_receive_times, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
             st.dataframe(users, use_container_width=True, key="user_list_df")
 
-            # 新增：重置用户领取次数功能
+            # 重置用户领取次数功能
             if st.session_state.permission_level >= 1:
                 st.divider()
                 st.subheader("🔄 重置用户领取次数")
@@ -470,7 +507,7 @@ else:
                     admin_data.append([admin[0], admin[1], role, admin[3]])
                 st.dataframe(admin_data, use_container_width=True, key="admin_list_df")
 
-    # ========== 普通用户领码界面（改为一次性领取最大值） ==========
+    # ========== 普通用户领码界面（一次性领取最大值） ==========
     st.header("🎁 Boss码自助领取")
     c.execute("SELECT remain_receive_times FROM users WHERE id=?", (st.session_state.user_id,))
     rt = c.fetchone()[0]
