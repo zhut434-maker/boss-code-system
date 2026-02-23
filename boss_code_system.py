@@ -467,7 +467,7 @@ else:
                       (st.session_state.user_id, code_id, code))
             conn.commit()
             st.success("领取成功！你的Boss码如下：")
-            st.code(code, language="text", key="received_code")
+            st.code(code, language="text")
             st.warning("请妥善保管，每个码仅可使用一次")
     
     st.divider()
@@ -477,4 +477,5 @@ else:
     if my_records:
         st.dataframe(my_records, use_container_width=True, key="my_record_df")
     else:
+
         st.info("你还没有领取过Boss码")
