@@ -81,8 +81,23 @@ def parse_boss_code_txt(file_content):
 conn = init_db()
 c = conn.cursor()
 
-# ========== 页面初始化：从Cookie自动恢复登录状态 ==========
+# ========== 核心修复1：先检查是否要退出登录 ==========
+# 用query param来强制退出，避免Cookie和session_state不同步
+if "logout" in st.query_params:
+    # 强制清除所有Cookie
+    for key in list(cookies.keys()):
+        del cookies[key]
+    cookies.save()
+    # 清除session_state
+    st.session_state.clear()
+    # 清除query param
+    del st.query_params["logout"]
+    # 强制刷新
+    st.rerun()
+
+# ========== 页面初始化：从Cookie恢复登录 ==========
 if "logged_in" not in st.session_state:
+    # 先检查Cookie
     if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
         st.session_state.logged_in = True
         st.session_state.user_id = int(cookies["user_id"])
@@ -98,19 +113,8 @@ if "logged_in" not in st.session_state:
 st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
 st.title("🎮 Boss码自助领取系统")
 
-# ========== 退出登录逻辑（最前置处理） ==========
-if st.session_state.logged_in:
-    if st.button("退出登录", key="logout_btn_top_right", use_container_width=True):
-        # 清空Cookie和会话
-        for key in list(cookies.keys()):
-            del cookies[key]
-        cookies.save()
-        st.session_state.clear()
-        st.rerun()
-
-# 未登录状态：登录/注册/忘记密码
+# 未登录状态
 if not st.session_state.logged_in:
-    # 新增忘记密码Tab
     tab1, tab2, tab3 = st.tabs(["用户登录", "账号注册", "忘记密码"])
     
     # 登录页
@@ -160,7 +164,7 @@ if not st.session_state.logged_in:
                 except sqlite3.IntegrityError:
                     st.error("用户名已存在，请更换")
     
-    # ========== 新增：忘记密码重置页 ==========
+    # 忘记密码页
     with tab3:
         st.subheader("重置账号密码")
         reset_username = st.text_input("请输入你的用户名", key="forget_username")
@@ -168,7 +172,6 @@ if not st.session_state.logged_in:
         confirm_new_pwd = st.text_input("确认新密码", type="password", key="forget_confirm_pwd")
         
         if st.button("确认重置密码", type="primary", use_container_width=True, key="forget_reset_btn"):
-            # 校验逻辑
             if not reset_username.strip():
                 st.error("请输入用户名")
             elif new_pwd != confirm_new_pwd:
@@ -176,24 +179,28 @@ if not st.session_state.logged_in:
             elif len(new_pwd) < 6:
                 st.error("新密码至少6位")
             else:
-                # 检查用户名是否存在
                 c.execute("SELECT id, username FROM users WHERE username = ?", (reset_username,))
                 target_user = c.fetchone()
                 if not target_user:
                     st.error("该用户名不存在！")
                 else:
-                    # 更新密码
                     c.execute("UPDATE users SET password = ? WHERE username = ?", (new_pwd, reset_username))
                     conn.commit()
                     st.success(f"用户【{reset_username}】的密码重置成功！请返回登录页使用新密码登录")
 
 # 已登录状态
 else:
-    # 用户信息
+    # ========== 核心修复2：退出登录按钮，用query param强制退出 ==========
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
+    with col2:
+        if st.button("退出登录", key="logout_btn", use_container_width=True):
+            # 用query param强制退出，避免状态不同步
+            st.query_params["logout"] = "true"
+            st.rerun()
+    
     st.divider()
 
     # 管理员后台
@@ -306,14 +313,14 @@ else:
                 c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
             st.dataframe(c.fetchall(), use_container_width=True, key="code_list_df")
 
-        # ========== 用户管理（优化密码重置，支持用户名） ==========
+        # ========== 用户管理 ==========
         with tabs[1]:
             st.subheader("用户列表")
             c.execute("SELECT id, username, permission_level, remain_receive_times, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
             st.dataframe(users, use_container_width=True, key="user_list_df")
 
-            # 管理员重置用户密码（优化版，支持用户名/ID）
+            # 管理员重置用户密码
             if st.session_state.permission_level >= 1:
                 st.divider()
                 st.subheader("🔐 管理员重置用户密码")
