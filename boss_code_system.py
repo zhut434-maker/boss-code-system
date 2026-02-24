@@ -1,42 +1,16 @@
 import streamlit as st
 import sqlite3
 import random
-from datetime import datetime, timedelta
-from streamlit_cookies_manager import EncryptedCookieManager
+from datetime import datetime
+import os
 
-# -------------------------- 1. 页面配置（必须是第一个Streamlit命令，绝对不能改顺序） --------------------------
-st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
+# -------------------------- 配置初始化 --------------------------
+# 权限等级定义
+PERMISSION_USER = 0       # 普通用户
+PERMISSION_SUB_ADMIN = 1  # 次级管理员
+PERMISSION_SUPER_ADMIN = 2# 超级管理员
 
-# -------------------------- 2. 核心：退出登录逻辑（页面第二顺位，所有其他代码之前执行） --------------------------
-# 只要URL里有logout=1，立即强制退出，绝对优先执行
-if "logout" in st.query_params:
-    # 初始化Cookie管理器（必须先初始化才能操作）
-    cookies = EncryptedCookieManager(
-        prefix="boss_code_final_v3_",
-        password="final_secure_pwd_v3_987654"
-    )
-    if cookies.ready():
-        # 第一步：强制删除所有Cookie，一个不留
-        for key in list(cookies.keys()):
-            del cookies[key]
-        cookies.save()  # 立即写入浏览器，确保清除生效
-    # 第二步：完全清空所有会话状态，彻底销毁登录痕迹
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    # 第三步：删除URL里的logout参数，避免循环触发
-    del st.query_params["logout"]
-    # 第四步：强制刷新页面，直接渲染登录页
-    st.rerun()
-
-# -------------------------- 3. Cookie管理器初始化（正常流程） --------------------------
-cookies = EncryptedCookieManager(
-    prefix="boss_code_final_v3_",
-    password="final_secure_pwd_v3_987654"
-)
-if not cookies.ready():
-    st.stop()
-
-# -------------------------- 4. 数据库初始化 --------------------------
+# 数据库初始化
 def init_db():
     conn = sqlite3.connect("boss_code_system.db", check_same_thread=False)
     c = conn.cursor()
@@ -69,144 +43,98 @@ def init_db():
             receive_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 初始化默认管理员
     try:
         c.execute("INSERT INTO users (username, password, permission_level, remain_receive_times) VALUES (?, ?, ?, ?)",
-                  ("admin", "admin123", 2, 9999))
+                  ("admin", "admin123", PERMISSION_SUPER_ADMIN, 9999))
     except:
         pass
     conn.commit()
     return conn
 
-# 统一解析Boss码
+# 统一解析Boss码（支持空格/换行分隔，过滤5位有效码）
 def parse_boss_codes(content):
     code_list = []
+    # 先按换行拆分每行
     lines = content.split("\n")
     for line in lines:
+        # 按空格拆分每行的码
         codes_in_line = line.strip().split()
         for code in codes_in_line:
             code = code.strip()
+            # 只保留5位的字母/数字组合
             if len(code) == 5 and code.isalnum():
                 code_list.append(code)
-    return list(set(code_list))
+    # 自动去重
+    code_list = list(set(code_list))
+    return code_list
 
 # 解析TXT文件
 def parse_boss_code_txt(file_content):
-    return parse_boss_codes(file_content.decode("utf-8"))
+    # 把TXT内容转成字符串，复用上面的统一解析逻辑
+    content = file_content.decode("utf-8")
+    return parse_boss_codes(content)
 
 # 数据库连接
 conn = init_db()
 c = conn.cursor()
 
-# -------------------------- 5. 登录状态初始化（完全以Cookie为准） --------------------------
+# 登录状态
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_id = 0
     st.session_state.username = ""
-    st.session_state.permission_level = 0
+    st.session_state.user_id = 0
+    st.session_state.permission_level = PERMISSION_USER
 
-# 从Cookie同步登录状态（唯一可信来源）
-if not st.session_state.logged_in:
-    if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
-        st.session_state.logged_in = True
-        st.session_state.user_id = int(cookies["user_id"])
-        st.session_state.username = cookies["username"]
-        st.session_state.permission_level = int(cookies["permission_level"])
-
-# -------------------------- 6. 页面标题 --------------------------
+# -------------------------- 页面 --------------------------
+st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
 st.title("🎮 Boss码自助领取系统")
 
-# -------------------------- 7. 渲染分支：要么登录页，要么已登录页，无中间状态 --------------------------
-# 未登录状态：只渲染登录/注册/忘记密码
+# 未登录
 if not st.session_state.logged_in:
-    tab1, tab2, tab3 = st.tabs(["用户登录", "账号注册", "忘记密码"])
-    
-    # 登录页
+    tab1, tab2 = st.tabs(["登录", "注册"])
     with tab1:
         username = st.text_input("用户名", key="login_username")
         password = st.text_input("密码", type="password", key="login_password")
-        remember_me = st.checkbox("记住我7天内免登录", value=True, key="remember_me")
-        
         if st.button("登录", use_container_width=True, key="login_btn"):
             c.execute("SELECT id, username, password, permission_level FROM users WHERE username = ?", (username,))
             user = c.fetchone()
             if user and password == user[2]:
-                # 写入Cookie
-                if remember_me:
-                    expires = datetime.now() + timedelta(days=7)
-                    cookies["user_id"] = str(user[0])
-                    cookies["username"] = user[1]
-                    cookies["permission_level"] = str(user[3])
-                    cookies.expires = expires
-                    cookies.save()
-                # 同步会话状态
                 st.session_state.logged_in = True
-                st.session_state.user_id = user[0]
                 st.session_state.username = user[1]
+                st.session_state.user_id = user[0]
                 st.session_state.permission_level = user[3]
-                st.success("登录成功！")
+                st.success("登录成功")
                 st.rerun()
             else:
                 st.error("账号或密码错误")
-    
-    # 注册页
     with tab2:
-        new_username = st.text_input("设置用户名", key="register_username")
-        new_password = st.text_input("设置密码", type="password", key="register_password")
-        confirm_pwd = st.text_input("确认密码", type="password", key="register_confirm_pwd")
-        
-        if st.button("注册账号", use_container_width=True, key="register_btn"):
-            if new_password != confirm_pwd:
-                st.error("两次密码输入不一致")
-            elif len(new_username) < 3:
-                st.error("用户名至少3位")
-            elif len(new_password) < 6:
-                st.error("密码至少6位")
+        new_username = st.text_input("用户名", key="register_username")
+        new_password = st.text_input("密码", type="password", key="register_password")
+        confirm = st.text_input("确认密码", type="password", key="register_confirm_pwd")
+        if st.button("注册", use_container_width=True, key="register_btn"):
+            if new_password != confirm:
+                st.error("两次密码不一致")
             else:
                 try:
                     c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (new_username, new_password))
                     conn.commit()
-                    st.success("注册成功！请返回登录页登录")
-                except sqlite3.IntegrityError:
-                    st.error("用户名已存在，请更换")
-    
-    # 忘记密码页
-    with tab3:
-        st.subheader("重置账号密码")
-        reset_username = st.text_input("请输入你的用户名", key="forget_username")
-        new_pwd = st.text_input("设置新密码", type="password", key="forget_new_pwd")
-        confirm_new_pwd = st.text_input("确认新密码", type="password", key="forget_confirm_pwd")
-        
-        if st.button("确认重置密码", type="primary", use_container_width=True, key="forget_reset_btn"):
-            if not reset_username.strip():
-                st.error("请输入用户名")
-            elif new_pwd != confirm_new_pwd:
-                st.error("两次密码输入不一致")
-            elif len(new_pwd) < 6:
-                st.error("新密码至少6位")
-            else:
-                c.execute("SELECT id, username FROM users WHERE username = ?", (reset_username,))
-                target_user = c.fetchone()
-                if not target_user:
-                    st.error("该用户名不存在！")
-                else:
-                    c.execute("UPDATE users SET password = ? WHERE username = ?", (new_pwd, reset_username))
-                    conn.commit()
-                    st.success(f"用户【{reset_username}】的密码重置成功！请返回登录页使用新密码登录")
+                    st.success("注册成功！请登录")
+                except:
+                    st.error("用户名已存在")
 
-# 已登录状态：只渲染系统内容
 else:
-    # 顶部用户信息 + 退出按钮（核心：点击直接改URL参数，强制触发退出）
+    # 用户信息
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
-        # 核心：点击按钮直接给URL加logout=1，触发最顶端的退出逻辑，100%生效
-        if st.button("退出登录", use_container_width=True, key="final_logout_btn"):
-            st.query_params["logout"] = "1"
+        if st.button("退出登录", use_container_width=True, key="logout_btn"):
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.session_state.user_id = 0
+            st.session_state.permission_level = PERMISSION_USER
             st.rerun()
-    
     st.divider()
 
     # 管理员后台
@@ -215,15 +143,16 @@ else:
 
         # ========== Boss码管理 ==========
         with tabs[0]:
-            # TXT文件上传导入
+            # 1. TXT文件上传导入
             st.subheader("📁 上传TXT文件导入（空格分隔）")
-            uploaded_file = st.file_uploader("选择存放Boss码的TXT文件", type="txt", key="code_uploader")
-            if uploaded_file and st.button("解析并导入TXT文件", type="primary", use_container_width=True, key="code_import_btn"):
-                codes = parse_boss_code_txt(uploaded_file.getvalue())
+            f = st.file_uploader("选择存放Boss码的TXT文件", type="txt", key="code_uploader")
+            if f and st.button("解析并导入TXT文件", type="primary", use_container_width=True, key="code_import_btn"):
+                codes = parse_boss_code_txt(f.getvalue())
                 if not codes:
                     st.error("未从文件中解析到有效Boss码（仅支持5位字母/数字组合）")
                 else:
-                    ok, dup = 0, 0
+                    ok = 0
+                    dup = 0
                     for cd in codes:
                         try:
                             c.execute("INSERT INTO boss_codes (code) VALUES (?)", (cd,))
@@ -237,7 +166,7 @@ else:
 
             st.divider()
 
-            # 手动粘贴导入
+            # 2. 恢复手动粘贴导入（支持空格分隔格式）
             st.subheader("📝 手动粘贴导入Boss码（空格分隔）")
             st.caption("支持格式：xxxxx xxxxx xxxxx（空格分隔）、一行一个、换行+空格混合，自动过滤无效码、自动去重")
             code_input = st.text_area("粘贴Boss码内容", height=200, key="paste_code_input")
@@ -245,11 +174,13 @@ else:
                 if not code_input.strip():
                     st.warning("请粘贴Boss码内容")
                 else:
+                    # 用统一的解析逻辑，支持空格/换行分隔
                     codes = parse_boss_codes(code_input)
                     if not codes:
                         st.error("未解析到有效Boss码（仅支持5位字母/数字组合）")
                     else:
-                        ok, dup = 0, 0
+                        ok = 0
+                        dup = 0
                         for cd in codes:
                             try:
                                 c.execute("INSERT INTO boss_codes (code) VALUES (?)", (cd,))
@@ -263,55 +194,55 @@ else:
 
             st.divider()
 
-            # Boss码删除管理
+            # 3. Boss码删除管理
             st.subheader("🗑️ Boss码删除管理")
             del_type = st.radio("选择删除方式", ["单个删除", "批量删除（按ID范围）"], horizontal=True, key="code_del_type")
             if del_type == "单个删除":
                 col1, col2 = st.columns(2)
                 with col1:
-                    del_code_id = st.number_input("要删除的Boss码ID", min_value=1, step=1, key="code_del_id")
+                    did = st.number_input("要删除的Boss码ID", min_value=1, step=1, key="code_del_id")
                 with col2:
                     confirm_del = st.checkbox("确认删除（不可恢复）", key="code_del_confirm")
                 if confirm_del and st.button("执行单个删除", key="code_del_btn"):
-                    c.execute("SELECT code FROM boss_codes WHERE id=?", (del_code_id,))
-                    code_info = c.fetchone()
-                    if not code_info:
+                    c.execute("SELECT code FROM boss_codes WHERE id=?", (did,))
+                    r = c.fetchone()
+                    if not r:
                         st.error("该ID的Boss码不存在！")
                     else:
-                        c.execute("DELETE FROM receive_records WHERE code_id=?", (del_code_id,))
-                        c.execute("DELETE FROM boss_codes WHERE id=?", (del_code_id,))
+                        c.execute("DELETE FROM receive_records WHERE code_id=?", (did,))
+                        c.execute("DELETE FROM boss_codes WHERE id=?", (did,))
                         conn.commit()
-                        st.success(f"成功删除Boss码：{code_info[0]}（ID：{del_code_id}）")
+                        st.success(f"成功删除Boss码：{r[0]}（ID：{did}）")
             else:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    del_start_id = st.number_input("起始ID", min_value=1, key="code_batch_del_start")
+                    s = st.number_input("起始ID", min_value=1, key="code_batch_del_start")
                 with col2:
-                    del_end_id = st.number_input("结束ID", min_value=1, key="code_batch_del_end")
+                    e = st.number_input("结束ID", min_value=1, key="code_batch_del_end")
                 with col3:
                     confirm_batch_del = st.checkbox("确认批量删除（不可恢复）", key="code_batch_del_confirm")
                 if confirm_batch_del and st.button("执行批量删除", key="code_batch_del_btn"):
-                    if del_start_id > del_end_id:
+                    if s > e:
                         st.error("起始ID不能大于结束ID！")
                     else:
-                        c.execute("SELECT COUNT(*) FROM boss_codes WHERE id BETWEEN ? AND ?", (del_start_id, del_end_id))
+                        c.execute("SELECT COUNT(*) FROM boss_codes WHERE id BETWEEN ? AND ?", (s, e))
                         count = c.fetchone()[0]
                         if count == 0:
                             st.error("该ID范围内无Boss码！")
                         else:
-                            c.execute("DELETE FROM receive_records WHERE code_id BETWEEN ? AND ?", (del_start_id, del_end_id))
-                            c.execute("DELETE FROM boss_codes WHERE id BETWEEN ? AND ?", (del_start_id, del_end_id))
+                            c.execute("DELETE FROM receive_records WHERE code_id BETWEEN ? AND ?", (s, e))
+                            c.execute("DELETE FROM boss_codes WHERE id BETWEEN ? AND ?", (s, e))
                             conn.commit()
                             st.success(f"批量删除完成！共删除 {count} 个Boss码")
 
             st.divider()
 
-            # Boss码库存列表
+            # 4. Boss码库存列表
             st.subheader("Boss码库存列表")
-            filter_status = st.selectbox("筛选状态", ["全部", "未领取", "已领取"], key="code_list_filter")
-            if filter_status == "未领取":
+            t = st.selectbox("筛选状态", ["全部", "未领取", "已领取"], key="code_list_filter")
+            if t == "未领取":
                 c.execute("SELECT * FROM boss_codes WHERE is_used=0 ORDER BY id DESC")
-            elif filter_status == "已领取":
+            elif t == "已领取":
                 c.execute("SELECT * FROM boss_codes WHERE is_used=1 ORDER BY receive_time DESC")
             else:
                 c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
@@ -324,88 +255,16 @@ else:
             users = c.fetchall()
             st.dataframe(users, use_container_width=True, key="user_list_df")
 
-            # 管理员重置用户密码
-            if st.session_state.permission_level >= 1:
+            # 修改密码（超级管理员可用）
+            if st.session_state.permission_level == 2:
                 st.divider()
-                st.subheader("🔐 管理员重置用户密码")
-                reset_method = st.radio("选择重置方式", ["按用户名重置", "按用户ID重置"], horizontal=True, key="admin_reset_method")
-                
-                if reset_method == "按用户名重置":
-                    reset_uname = st.text_input("要重置的用户名", key="admin_reset_uname")
-                    admin_new_pwd = st.text_input("设置新密码", type="password", key="admin_reset_pwd")
-                    if st.button("执行重置", type="primary", use_container_width=True, key="admin_reset_uname_btn"):
-                        if not reset_uname.strip():
-                            st.error("请输入用户名")
-                        elif len(admin_new_pwd) < 6:
-                            st.error("密码至少6位")
-                        else:
-                            c.execute("SELECT id, username, permission_level FROM users WHERE username = ?", (reset_uname,))
-                            u = c.fetchone()
-                            if not u:
-                                st.error("该用户名不存在！")
-                            elif u[2] == 2 and st.session_state.permission_level != 2:
-                                st.error("次级管理员无权修改超级管理员的密码")
-                            else:
-                                c.execute("UPDATE users SET password = ? WHERE username = ?", (admin_new_pwd, reset_uname))
-                                conn.commit()
-                                st.success(f"用户【{reset_uname}】的密码已重置成功！")
-                else:
-                    reset_uid = st.number_input("要重置的用户ID", min_value=1, step=1, key="admin_reset_uid")
-                    admin_new_pwd = st.text_input("设置新密码", type="password", key="admin_reset_pwd_id")
-                    if st.button("执行重置", type="primary", use_container_width=True, key="admin_reset_uid_btn"):
-                        if len(admin_new_pwd) < 6:
-                            st.error("密码至少6位")
-                        else:
-                            c.execute("SELECT id, username, permission_level FROM users WHERE id = ?", (reset_uid,))
-                            u = c.fetchone()
-                            if not u:
-                                st.error("该ID的用户不存在！")
-                            elif u[2] == 2 and st.session_state.permission_level != 2:
-                                st.error("次级管理员无权修改超级管理员的密码")
-                            else:
-                                c.execute("UPDATE users SET password = ? WHERE id = ?", (admin_new_pwd, reset_uid))
-                                conn.commit()
-                                st.success(f"用户【{u[1]}】的密码已重置成功！")
-
-            st.divider()
-            st.subheader("🔄 重置用户领取次数")
-            reset_type = st.radio("选择重置方式", ["单个用户重置", "批量用户重置（按ID范围）"], horizontal=True, key="reset_type")
-            
-            if reset_type == "单个用户重置":
-                col1, col2 = st.columns(2)
-                with col1:
-                    reset_uid = st.number_input("要重置的用户ID", min_value=1, step=1, key="reset_uid")
-                with col2:
-                    reset_times = st.number_input("重置为多少次", min_value=0, step=1, value=10, key="reset_times")
-                if st.button("执行单个重置", type="primary", use_container_width=True, key="reset_single_btn"):
-                    c.execute("SELECT username FROM users WHERE id=?", (reset_uid,))
-                    u = c.fetchone()
-                    if not u:
-                        st.error("该ID的用户不存在！")
-                    else:
-                        c.execute("UPDATE users SET remain_receive_times=? WHERE id=?", (reset_times, reset_uid))
-                        conn.commit()
-                        st.success(f"成功重置用户【{u[0]}】的领取次数为 {reset_times} 次！")
-            else:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    reset_start_id = st.number_input("起始用户ID", min_value=1, step=1, value=1, key="reset_start_id")
-                with col2:
-                    reset_end_id = st.number_input("结束用户ID", min_value=1, step=1, value=10, key="reset_end_id")
-                with col3:
-                    reset_batch_times = st.number_input("重置为多少次", min_value=0, step=1, value=10, key="reset_batch_times")
-                if st.button("执行批量重置", type="primary", use_container_width=True, key="reset_batch_btn"):
-                    if reset_start_id > reset_end_id:
-                        st.error("起始ID不能大于结束ID！")
-                    else:
-                        c.execute("""
-                            UPDATE users 
-                            SET remain_receive_times=? 
-                            WHERE id BETWEEN ? AND ? AND permission_level != 2
-                        """, (reset_batch_times, reset_start_id, reset_end_id))
-                        affected = conn.total_changes
-                        conn.commit()
-                        st.success(f"批量重置完成！共重置 {affected} 个用户的领取次数为 {reset_batch_times} 次")
+                st.subheader("🔐 修改任意用户密码（含管理员）")
+                uid = st.number_input("要修改的用户ID", min_value=1, key="pwd_modify_uid")
+                new_pwd = st.text_input("新密码", type="password", key="pwd_modify_new")
+                if st.button("设置新密码", use_container_width=True, key="pwd_modify_btn"):
+                    c.execute("UPDATE users SET password=? WHERE id=?", (new_pwd, uid))
+                    conn.commit()
+                    st.success("密码已修改！")
 
             st.divider()
             st.subheader("🗑️ 用户删除管理（仅超管）")
@@ -414,53 +273,53 @@ else:
                 if del_u_type == "单个删除用户":
                     col1, col2 = st.columns(2)
                     with col1:
-                        del_uid = st.number_input("要删除的用户ID", min_value=1, step=1, key="user_del_id")
+                        duid = st.number_input("要删除的用户ID", min_value=1, step=1, key="user_del_id")
                     with col2:
                         confirm_user_del = st.checkbox("我确认要删除该用户（不可恢复）", key="user_del_confirm")
                     if confirm_user_del and st.button("执行单个删除用户", key="user_del_btn"):
-                        if del_uid == st.session_state.user_id:
+                        if duid == st.session_state.user_id:
                             st.error("不能删除自己的账号！")
                         else:
-                            c.execute("SELECT username, permission_level FROM users WHERE id=?", (del_uid,))
+                            c.execute("SELECT username, permission_level FROM users WHERE id=?", (duid,))
                             u = c.fetchone()
                             if not u:
                                 st.error("该ID的用户不存在！")
                             elif u[1] == 2:
                                 st.error("不能删除超级管理员账号！")
                             else:
-                                c.execute("DELETE FROM receive_records WHERE user_id=?", (del_uid,))
-                                c.execute("DELETE FROM users WHERE id=?", (del_uid,))
+                                c.execute("DELETE FROM receive_records WHERE user_id=?", (duid,))
+                                c.execute("DELETE FROM users WHERE id=?", (duid,))
                                 conn.commit()
-                                st.success(f"成功删除用户：{u[0]}（ID：{del_uid}），并清理了其所有领取记录")
+                                st.success(f"成功删除用户：{u[0]}（ID：{duid}），并清理了其所有领取记录")
                 else:
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        del_user_start_id = st.number_input("起始用户ID", min_value=1, step=1, value=1, key="user_batch_del_start")
+                        delete_user_start_id = st.number_input("起始用户ID", min_value=1, step=1, value=1, key="user_batch_del_start")
                     with col2:
-                        del_user_end_id = st.number_input("结束用户ID", min_value=1, step=1, value=10, key="user_batch_del_end")
+                        delete_user_end_id = st.number_input("结束用户ID", min_value=1, step=1, value=10, key="user_batch_del_end")
                     with col3:
-                        confirm_batch_user_del = st.checkbox("确认批量删除（不可恢复）", key="user_batch_del_confirm")
-                    if confirm_batch_user_del and st.button("执行批量删除用户", key="user_batch_del_btn"):
-                        if del_user_start_id > del_user_end_id:
+                        confirm_batch_user_delete = st.checkbox("确认批量删除（不可恢复）", key="user_batch_del_confirm")
+                    if confirm_batch_user_delete and st.button("执行批量删除用户", key="user_batch_del_btn"):
+                        if delete_user_start_id > delete_user_end_id:
                             st.error("起始ID不能大于结束ID！")
-                        elif del_user_start_id <= st.session_state.user_id <= del_user_end_id:
+                        elif delete_user_start_id <= st.session_state.user_id <= delete_user_end_id:
                             st.error("不能删除包含自己账号的ID范围！")
                         else:
                             c.execute("""
                                 SELECT COUNT(*) FROM users 
                                 WHERE id BETWEEN ? AND ? 
-                                AND permission_level != 2
-                            """, (del_user_start_id, del_user_end_id))
+                                AND permission_level != ?
+                            """, (delete_user_start_id, delete_user_end_id, PERMISSION_SUPER_ADMIN))
                             count = c.fetchone()[0]
                             if count == 0:
                                 st.error("该ID范围内无普通用户/次级管理员可删除！")
                             else:
-                                c.execute("DELETE FROM receive_records WHERE user_id BETWEEN ? AND ?", (del_user_start_id, del_user_end_id))
+                                c.execute("DELETE FROM receive_records WHERE user_id BETWEEN ? AND ?", (delete_user_start_id, delete_user_end_id))
                                 c.execute("""
                                     DELETE FROM users 
                                     WHERE id BETWEEN ? AND ? 
-                                    AND permission_level != 2
-                                """, (del_user_start_id, del_user_end_id))
+                                    AND permission_level != ?
+                                """, (delete_user_start_id, delete_user_end_id, PERMISSION_SUPER_ADMIN))
                                 conn.commit()
                                 st.success(f"批量删除完成！共删除 {count} 个用户，并清理了其所有领取记录")
 
@@ -482,8 +341,8 @@ else:
                         c.execute("""
                             UPDATE users 
                             SET remain_receive_times = ? 
-                            WHERE id BETWEEN ? AND ? AND permission_level != 2
-                        """, (batch_remain_times, start_id, end_id))
+                            WHERE id BETWEEN ? AND ? AND permission_level != ?
+                        """, (batch_remain_times, start_id, end_id, PERMISSION_SUPER_ADMIN))
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
@@ -511,11 +370,25 @@ else:
                             c.execute(f"""
                                 UPDATE users 
                                 SET remain_receive_times = ? 
-                                WHERE id IN ({id_placeholders}) AND permission_level != 2
-                            """, [batch_remain_times] + id_list)
+                                WHERE id IN ({id_placeholders}) AND permission_level != ?
+                            """, [batch_remain_times] + id_list + [PERMISSION_SUPER_ADMIN])
                             affected = conn.total_changes
                             conn.commit()
                             st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
+
+            st.divider()
+            st.subheader("⚙️ 单个设置用户领取次数")
+            modify_user_id = st.number_input("目标用户ID", min_value=1, step=1, key="single_times_uid")
+            new_remain_times = st.number_input("剩余可领取次数", min_value=0, step=1, value=1, key="single_times_num")
+            if st.button("确认修改领取次数", use_container_width=True, key="single_times_btn"):
+                c.execute("SELECT permission_level FROM users WHERE id = ?", (modify_user_id,))
+                target_user = c.fetchone()
+                if target_user and target_user[0] == PERMISSION_SUPER_ADMIN and st.session_state.permission_level != PERMISSION_SUPER_ADMIN:
+                    st.error("无权限修改超级管理员的信息")
+                else:
+                    c.execute("UPDATE users SET remain_receive_times = ? WHERE id = ?", (new_remain_times, modify_user_id))
+                    conn.commit()
+                    st.success("修改成功！")
 
         # ========== 领取记录 ==========
         with tabs[2]:
@@ -533,12 +406,12 @@ else:
             c.execute("SELECT COUNT(*) FROM boss_codes")
             total = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM boss_codes WHERE is_used=0")
-            remain = c.fetchone()[0]
+            rem = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM boss_codes WHERE is_used=1")
             used = c.fetchone()[0]
             col1, col2, col3 = st.columns(3)
             col1.metric("总库存", total)
-            col2.metric("剩余可领取", remain)
+            col2.metric("剩余可领取", rem)
             col3.metric("已领取", used)
 
         # ========== 权限设置 ==========
@@ -548,7 +421,7 @@ else:
                 target_user_id = st.number_input("目标用户ID", min_value=1, step=1, key="perm_modify_uid")
                 target_permission = st.selectbox(
                     "设置用户权限",
-                    options=[("普通用户", 0), ("次级管理员", 1)],
+                    options=[("普通用户", PERMISSION_USER), ("次级管理员", PERMISSION_SUB_ADMIN)],
                     format_func=lambda x: x[0],
                     key="perm_modify_level"
                 )
@@ -571,52 +444,33 @@ else:
                 admin_list = c.fetchall()
                 admin_data = []
                 for admin in admin_list:
-                    role = "超级管理员" if admin[2] == 2 else "次级管理员"
+                    role = "超级管理员" if admin[2] == PERMISSION_SUPER_ADMIN else "次级管理员"
                     admin_data.append([admin[0], admin[1], role, admin[3]])
                 st.dataframe(admin_data, use_container_width=True, key="admin_list_df")
 
     # ========== 普通用户领码界面 ==========
     st.header("🎁 Boss码自助领取")
     c.execute("SELECT remain_receive_times FROM users WHERE id=?", (st.session_state.user_id,))
-    remain_times = c.fetchone()[0]
-    st.metric("剩余可领取次数", remain_times)
+    rt = c.fetchone()[0]
+    st.metric("剩余可领取次数", rt)
 
-    if st.button("一次性领取所有Boss码", type="primary", use_container_width=True, disabled=remain_times <= 0, key="receive_all_btn"):
-        # 查库存
+    if st.button("点击领取Boss码", type="primary", use_container_width=True, disabled=rt <= 0, key="receive_code_btn"):
         c.execute("SELECT id, code FROM boss_codes WHERE is_used = 0")
         available_codes = c.fetchall()
-        
         if not available_codes:
             st.error("当前Boss码已领完，请联系管理员补充库存")
-        elif len(available_codes) < remain_times:
-            st.warning(f"库存不足！当前仅剩 {len(available_codes)} 个码，已为你全部领取")
-            receive_num = len(available_codes)
         else:
-            receive_num = remain_times
-        
-        # 执行领取
-        if receive_num > 0:
-            selected_codes = random.sample(available_codes, receive_num)
-            received_codes = []
-            
-            for code_info in selected_codes:
-                code_id, code = code_info
-                # 更新码状态
-                c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
-                          (st.session_state.user_id, datetime.now(), code_id))
-                # 插入记录
-                c.execute("INSERT INTO receive_records (user_id, code_id, code) VALUES (?, ?, ?)",
-                          (st.session_state.user_id, code_id, code))
-                received_codes.append(code)
-            
-            # 更新用户剩余次数
-            c.execute("UPDATE users SET remain_receive_times = remain_receive_times - ? WHERE id = ?", (receive_num, st.session_state.user_id))
+            selected_code = random.choice(available_codes)
+            code_id = selected_code[0]
+            code = selected_code[1]
+            c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
+                      (st.session_state.user_id, datetime.now(), code_id))
+            c.execute("UPDATE users SET remain_receive_times = remain_receive_times - 1 WHERE id = ?", (st.session_state.user_id,))
+            c.execute("INSERT INTO receive_records (user_id, code_id, code) VALUES (?, ?, ?)",
+                      (st.session_state.user_id, code_id, code))
             conn.commit()
-            
-            # 显示结果
-            st.success(f"领取成功！共领取 {len(received_codes)} 个Boss码：")
-            for i, code in enumerate(received_codes, 1):
-                st.code(f"{i}. {code}", language="text")
+            st.success("领取成功！你的Boss码如下：")
+            st.code(code, language="text", key="received_code")
             st.warning("请妥善保管，每个码仅可使用一次")
     
     st.divider()
