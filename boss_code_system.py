@@ -15,15 +15,6 @@ cookies = EncryptedCookieManager(
 if not cookies.ready():
     st.stop()
 
-# -------------------------- 3. 退出登录逻辑 --------------------------
-if "logout" in st.query_params:
-    for key in list(cookies.keys()):
-        del cookies[key]
-    cookies.save()
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    del st.query_params["logout"]
-    st.rerun()
 
 # -------------------------- 4. 数据库初始化 --------------------------
 def init_db():
@@ -87,15 +78,16 @@ def parse_boss_code_txt(file_content):
 conn = init_db()
 c = conn.cursor()
 
-# -------------------------- 5. 登录状态初始化（完全以Cookie为准） --------------------------
+# -------------------------- 5. 登录状态初始化 --------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = 0
     st.session_state.username = ""
     st.session_state.permission_level = 0
+    st.session_state.force_logout = False
 
-# 从Cookie同步登录状态（唯一可信来源）
-if not st.session_state.logged_in:
+# 从Cookie同步登录状态（force_logout时跳过，防止cookie恢复登录）
+if not st.session_state.logged_in and not st.session_state.get("force_logout"):
     if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
         st.session_state.logged_in = True
         st.session_state.user_id = int(cookies["user_id"])
@@ -191,9 +183,13 @@ else:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
         st.subheader(f"欢迎 {st.session_state.username} | {role}")
     with col2:
-        # 核心：点击按钮直接给URL加logout=1，触发最顶端的退出逻辑，100%生效
         if st.button("退出登录", use_container_width=True, key="final_logout_btn"):
-            st.query_params["logout"] = "1"
+            for key in list(cookies.keys()):
+                del cookies[key]
+            cookies.save()
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.session_state.force_logout = True
             st.rerun()
     
     st.divider()
