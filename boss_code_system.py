@@ -536,7 +536,7 @@ else:
                 SELECT u.username, GROUP_CONCAT(r.code, ' '), MIN(r.receive_time)
                 FROM receive_records r
                 LEFT JOIN users u ON r.user_id = u.id
-                GROUP BY r.batch_id
+                GROUP BY COALESCE(r.batch_id, r.id)
                 ORDER BY MIN(r.receive_time) DESC
             ''')
             st.dataframe(pd.DataFrame(c.fetchall(), columns=["用户名","码","领取时间"]), use_container_width=True, key="record_list_df")
@@ -636,7 +636,7 @@ else:
     c.execute('''
         SELECT GROUP_CONCAT(code, ' '), MIN(receive_time)
         FROM receive_records WHERE user_id = ?
-        GROUP BY batch_id ORDER BY MIN(receive_time) DESC
+        GROUP BY COALESCE(batch_id, id) ORDER BY MIN(receive_time) DESC
     ''', (st.session_state.user_id,))
     my_records = c.fetchall()
     if my_records:
