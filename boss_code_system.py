@@ -55,9 +55,14 @@ def init_db():
             user_id INTEGER NOT NULL,
             code_id INTEGER NOT NULL,
             code TEXT NOT NULL,
+            batch_id TEXT,
             receive_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    try:
+        c.execute("ALTER TABLE receive_records ADD COLUMN batch_id TEXT")
+    except:
+        pass
     # 初始化默认管理员
     try:
         c.execute("INSERT INTO users (username, password, permission_level, remain_receive_times) VALUES (?, ?, ?, ?)",
@@ -528,13 +533,13 @@ else:
         with tabs[2]:
             st.subheader("全量领取记录")
             c.execute('''
-                SELECT u.username, GROUP_CONCAT(r.code, ' '), MAX(r.receive_time)
+                SELECT u.username, GROUP_CONCAT(r.code, ' '), MIN(r.receive_time)
                 FROM receive_records r
                 LEFT JOIN users u ON r.user_id = u.id
-                GROUP BY r.user_id
-                ORDER BY MAX(r.receive_time) DESC
+                GROUP BY r.batch_id
+                ORDER BY MIN(r.receive_time) DESC
             ''')
-            st.dataframe(pd.DataFrame(c.fetchall(), columns=["用户名","码","最后领取时间"]), use_container_width=True, key="record_list_df")
+            st.dataframe(pd.DataFrame(c.fetchall(), columns=["用户名","码","领取时间"]), use_container_width=True, key="record_list_df")
 
         # ========== 库存统计 ==========
         with tabs[3]:
@@ -606,15 +611,14 @@ else:
         if receive_num > 0:
             selected_codes = random.sample(available_codes, receive_num)
             received_codes = []
+            batch_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
             
             for code_info in selected_codes:
                 code_id, code = code_info
-                # 更新码状态
                 c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
                           (st.session_state.user_id, datetime.now(), code_id))
-                # 插入记录
-                c.execute("INSERT INTO receive_records (user_id, code_id, code) VALUES (?, ?, ?)",
-                          (st.session_state.user_id, code_id, code))
+                c.execute("INSERT INTO receive_records (user_id, code_id, code, batch_id) VALUES (?, ?, ?, ?)",
+                          (st.session_state.user_id, code_id, code, batch_id))
                 received_codes.append(code)
             
             # 更新用户剩余次数
@@ -629,7 +633,11 @@ else:
     
     st.divider()
     st.subheader("我的领取记录")
-    c.execute("SELECT code, receive_time FROM receive_records WHERE user_id = ? ORDER BY receive_time DESC", (st.session_state.user_id,))
+    c.execute('''
+        SELECT GROUP_CONCAT(code, ' '), MIN(receive_time)
+        FROM receive_records WHERE user_id = ?
+        GROUP BY batch_id ORDER BY MIN(receive_time) DESC
+    ''', (st.session_state.user_id,))
     my_records = c.fetchall()
     if my_records:
         st.dataframe(pd.DataFrame(my_records, columns=["码","领取时间"]), use_container_width=True, key="my_record_df")
