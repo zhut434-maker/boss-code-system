@@ -528,12 +528,13 @@ else:
         with tabs[2]:
             st.subheader("全量领取记录")
             c.execute('''
-                SELECT r.id, u.username, r.code, r.receive_time 
+                SELECT u.username, GROUP_CONCAT(r.code, ' '), MAX(r.receive_time)
                 FROM receive_records r
                 LEFT JOIN users u ON r.user_id = u.id
-                ORDER BY r.receive_time DESC
+                GROUP BY r.user_id
+                ORDER BY MAX(r.receive_time) DESC
             ''')
-            st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","用户名","码","领取时间"]), use_container_width=True, key="record_list_df")
+            st.dataframe(pd.DataFrame(c.fetchall(), columns=["用户名","码","最后领取时间"]), use_container_width=True, key="record_list_df")
 
         # ========== 库存统计 ==========
         with tabs[3]:
