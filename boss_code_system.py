@@ -26,10 +26,18 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
             permission_level INTEGER DEFAULT 0,
-            remain_receive_times INTEGER DEFAULT 1,
+            remain_receive_times INTEGER DEFAULT 10,
+            daily_quota INTEGER DEFAULT 10,
+            last_reset_date TEXT DEFAULT NULL,
             create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # 迁移旧表：添加新字段（如果不存在）
+    for col, definition in [("daily_quota", "INTEGER DEFAULT 1"), ("last_reset_date", "TEXT DEFAULT NULL")]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+        except:
+            pass
     c.execute('''
         CREATE TABLE IF NOT EXISTS boss_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +86,15 @@ def parse_boss_code_txt(file_content):
 conn = init_db()
 c = conn.cursor()
 
+# 每日自动重置领取次数
+def daily_reset_if_needed(user_id):
+    today = datetime.now().strftime("%Y-%m-%d")
+    c.execute("SELECT last_reset_date, daily_quota FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
+    if row and row[0] != today:
+        c.execute("UPDATE users SET remain_receive_times=daily_quota, last_reset_date=? WHERE id=?", (today, user_id))
+        conn.commit()
+
 # -------------------------- 5. 登录状态初始化 --------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -93,6 +110,10 @@ if not st.session_state.logged_in and not st.session_state.get("force_logout"):
         st.session_state.user_id = int(cookies["user_id"])
         st.session_state.username = cookies["username"]
         st.session_state.permission_level = int(cookies["permission_level"])
+
+# 已登录则执行每日重置检查
+if st.session_state.logged_in:
+    daily_reset_if_needed(st.session_state.user_id)
 
 # -------------------------- 6. 页面标题 --------------------------
 st.title("🎮 Boss码自助领取系统")
@@ -145,7 +166,7 @@ if not st.session_state.logged_in:
                 st.error("密码至少6位")
             else:
                 try:
-                    c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (new_username, new_password))
+                    c.execute("INSERT INTO users (username, password, remain_receive_times, daily_quota) VALUES (?, ?, 10, 10)", (new_username, new_password))
                     conn.commit()
                     st.success("注册成功！请返回登录页登录")
                 except sqlite3.IntegrityError:
@@ -305,7 +326,7 @@ else:
         # ========== 用户管理 ==========
         with tabs[1]:
             st.subheader("用户列表")
-            c.execute("SELECT id, username, permission_level, remain_receive_times, create_time FROM users ORDER BY id DESC")
+            c.execute("SELECT id, username, permission_level, remain_receive_times, daily_quota, last_reset_date, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
             st.dataframe(users, use_container_width=True, key="user_list_df")
 
@@ -368,7 +389,7 @@ else:
                     if not u:
                         st.error("该ID的用户不存在！")
                     else:
-                        c.execute("UPDATE users SET remain_receive_times=? WHERE id=?", (reset_times, reset_uid))
+                        c.execute("UPDATE users SET remain_receive_times=?, daily_quota=? WHERE id=?", (reset_times, reset_times, reset_uid))
                         conn.commit()
                         st.success(f"成功重置用户【{u[0]}】的领取次数为 {reset_times} 次！")
             else:
@@ -384,10 +405,10 @@ else:
                         st.error("起始ID不能大于结束ID！")
                     else:
                         c.execute("""
-                            UPDATE users 
-                            SET remain_receive_times=? 
+                            UPDATE users
+                            SET remain_receive_times=?, daily_quota=?
                             WHERE id BETWEEN ? AND ? AND permission_level != 2
-                        """, (reset_batch_times, reset_start_id, reset_end_id))
+                        """, (reset_batch_times, reset_batch_times, reset_start_id, reset_end_id))
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量重置完成！共重置 {affected} 个用户的领取次数为 {reset_batch_times} 次")
@@ -465,10 +486,10 @@ else:
                         st.error("起始ID不能大于结束ID")
                     else:
                         c.execute("""
-                            UPDATE users 
-                            SET remain_receive_times = ? 
+                            UPDATE users
+                            SET remain_receive_times = ?, daily_quota = ?
                             WHERE id BETWEEN ? AND ? AND permission_level != 2
-                        """, (batch_remain_times, start_id, end_id))
+                        """, (batch_remain_times, batch_remain_times, start_id, end_id))
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
@@ -494,10 +515,10 @@ else:
                         else:
                             id_placeholders = ",".join(["?"] * len(id_list))
                             c.execute(f"""
-                                UPDATE users 
-                                SET remain_receive_times = ? 
+                                UPDATE users
+                                SET remain_receive_times = ?, daily_quota = ?
                                 WHERE id IN ({id_placeholders}) AND permission_level != 2
-                            """, [batch_remain_times] + id_list)
+                            """, [batch_remain_times, batch_remain_times] + id_list)
                             affected = conn.total_changes
                             conn.commit()
                             st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
