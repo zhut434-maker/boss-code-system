@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import random
+import pandas as pd
 from datetime import datetime, timedelta
 from streamlit_cookies_manager import EncryptedCookieManager
 
@@ -321,14 +322,14 @@ else:
                 c.execute("SELECT * FROM boss_codes WHERE is_used=1 ORDER BY receive_time DESC")
             else:
                 c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
-            st.dataframe(c.fetchall(), use_container_width=True, key="code_list_df")
+            st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","码","是否已领","领取用户ID","领取时间","创建时间"]), use_container_width=True, key="code_list_df")
 
         # ========== 用户管理 ==========
         with tabs[1]:
             st.subheader("用户列表")
             c.execute("SELECT id, username, permission_level, remain_receive_times, daily_quota, last_reset_date, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
-            st.dataframe(users, use_container_width=True, key="user_list_df")
+            st.dataframe(pd.DataFrame(users, columns=["ID","用户名","权限等级","剩余次数","每日配额","上次重置日期","注册时间"]), use_container_width=True, key="user_list_df")
 
             # 管理员重置用户密码
             if st.session_state.permission_level >= 1:
@@ -532,7 +533,7 @@ else:
                 LEFT JOIN users u ON r.user_id = u.id
                 ORDER BY r.receive_time DESC
             ''')
-            st.dataframe(c.fetchall(), use_container_width=True, key="record_list_df")
+            st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","用户名","码","领取时间"]), use_container_width=True, key="record_list_df")
 
         # ========== 库存统计 ==========
         with tabs[3]:
@@ -579,7 +580,7 @@ else:
                 for admin in admin_list:
                     role = "超级管理员" if admin[2] == 2 else "次级管理员"
                     admin_data.append([admin[0], admin[1], role, admin[3]])
-                st.dataframe(admin_data, use_container_width=True, key="admin_list_df")
+                st.dataframe(pd.DataFrame(admin_data, columns=["ID","用户名","角色","注册时间"]), use_container_width=True, key="admin_list_df")
 
     # ========== 普通用户领码界面 ==========
     st.header("🎁 Boss码自助领取")
@@ -630,6 +631,6 @@ else:
     c.execute("SELECT code, receive_time FROM receive_records WHERE user_id = ? ORDER BY receive_time DESC", (st.session_state.user_id,))
     my_records = c.fetchall()
     if my_records:
-        st.dataframe(my_records, use_container_width=True, key="my_record_df")
+        st.dataframe(pd.DataFrame(my_records, columns=["码","领取时间"]), use_container_width=True, key="my_record_df")
     else:
         st.info("你还没有领取过Boss码")
