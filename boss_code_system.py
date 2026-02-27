@@ -320,14 +320,8 @@ else:
 
             # Boss码库存列表
             st.subheader("Boss码库存列表")
-            filter_status = st.selectbox("筛选状态", ["全部", "未领取", "已领取"], key="code_list_filter")
-            if filter_status == "未领取":
-                c.execute("SELECT * FROM boss_codes WHERE is_used=0 ORDER BY id DESC")
-            elif filter_status == "已领取":
-                c.execute("SELECT * FROM boss_codes WHERE is_used=1 ORDER BY receive_time DESC")
-            else:
-                c.execute("SELECT * FROM boss_codes ORDER BY id DESC")
-            st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","码","是否已领","领取用户ID","领取时间","创建时间"]), use_container_width=True, key="code_list_df")
+            c.execute("SELECT id, code, create_time FROM boss_codes ORDER BY id DESC")
+            st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","码","创建时间"]), use_container_width=True, key="code_list_df")
 
         # ========== 用户管理 ==========
         with tabs[1]:
@@ -544,11 +538,10 @@ else:
         # ========== 库存统计 ==========
         with tabs[3]:
             c.execute("SELECT COUNT(*) FROM boss_codes")
-            total = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM boss_codes WHERE is_used=0")
             remain = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM boss_codes WHERE is_used=1")
+            c.execute("SELECT COUNT(DISTINCT code) FROM receive_records")
             used = c.fetchone()[0]
+            total = remain + used
             col1, col2, col3 = st.columns(3)
             col1.metric("总库存", total)
             col2.metric("剩余可领取", remain)
@@ -596,7 +589,7 @@ else:
 
     if st.button("一次性领取所有Boss码", type="primary", use_container_width=True, disabled=remain_times <= 0, key="receive_all_btn"):
         # 查库存
-        c.execute("SELECT id, code FROM boss_codes WHERE is_used = 0")
+        c.execute("SELECT id, code FROM boss_codes")
         available_codes = c.fetchall()
         
         if not available_codes:
@@ -615,8 +608,7 @@ else:
             
             for code_info in selected_codes:
                 code_id, code = code_info
-                c.execute("UPDATE boss_codes SET is_used = 1, receive_user_id = ?, receive_time = ? WHERE id = ?",
-                          (st.session_state.user_id, datetime.now(), code_id))
+                c.execute("DELETE FROM boss_codes WHERE id = ?", (code_id,))
                 c.execute("INSERT INTO receive_records (user_id, code_id, code, batch_id) VALUES (?, ?, ?, ?)",
                           (st.session_state.user_id, code_id, code, batch_id))
                 received_codes.append(code)
