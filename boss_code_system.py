@@ -619,8 +619,8 @@ else:
             
             # 显示结果
             st.success(f"领取成功！共领取 {len(received_codes)} 个Boss码：")
-            for i, code in enumerate(received_codes, 1):
-                st.code(f"{i}. {code}", language="text")
+            for code in received_codes:
+                st.code(code, language="text")
             st.warning("请妥善保管，每个码仅可使用一次")
     
     st.divider()
