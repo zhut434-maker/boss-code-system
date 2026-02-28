@@ -7,6 +7,48 @@ from streamlit_cookies_manager import EncryptedCookieManager
 
 # -------------------------- 1. 页面配置（必须是第一个Streamlit命令，绝对不能改顺序） --------------------------
 st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
+# ================= 【新增】云端自动上传API接口（放在最顶部） =================
+import urllib.parse
+try:
+    from streamlit.web.server.websocket_headers import _get_websocket_headers
+except:
+    pass
+
+# 检测是否是刷码工具的API上传请求
+try:
+    headers = _get_websocket_headers()
+    if headers and "Referer" in headers:
+        query = urllib.parse.urlparse(headers["Referer"]).query
+        params = urllib.parse.parse_qs(query)
+        
+        # 检测上传参数：?upload_code=XXX&auth_key=你的密钥
+        if "upload_code" in params and "auth_key" in params:
+            # ========== 这里可以自定义密钥，防止别人恶意上传 ==========
+            AUTH_KEY = "my_boss_code_secret_2026"
+            
+            if params["auth_key"][0] == AUTH_KEY:
+                upload_code = params["upload_code"][0].strip()
+                # 简单校验码的格式（5位字母/数字，和你系统一致）
+                if len(upload_code) >= 3 and upload_code.isalnum():
+                    try:
+                        import sqlite3
+                        conn = sqlite3.connect("boss_code_system.db", check_same_thread=False)
+                        c = conn.cursor()
+                        # 插入码，重复的自动忽略
+                        c.execute("INSERT OR IGNORE INTO boss_codes (code) VALUES (?)", (upload_code,))
+                        conn.commit()
+                        conn.close()
+                        st.write("API_SUCCESS")
+                    except Exception as e:
+                        st.write(f"API_ERROR_DB: {str(e)}")
+                else:
+                    st.write("API_ERROR_INVALID_CODE")
+            else:
+                st.write("API_ERROR_AUTH_FAILED")
+            # 处理完API请求直接停止，不渲染网页
+            st.stop()
+except:
+    pass
 
 # -------------------------- 2. Cookie管理器初始化 --------------------------
 cookies = EncryptedCookieManager(
