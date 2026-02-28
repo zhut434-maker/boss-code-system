@@ -1,14 +1,11 @@
+# ================= 第1行：必须第一个import streamlit =================
 import streamlit as st
+
+# ================= 第2行：必须第二个执行，页面配置 =================
 st.set_page_config(page_title="Boss码领取系统", page_icon="🎮", layout="wide")
-import sqlite3
-import random
-import pandas as pd
-from datetime import datetime, timedelta
-from streamlit_cookies_manager import EncryptedCookieManager
 
-
-
-# ================= 【新增】云端自动上传API接口（放在最顶部） =================
+# ================= 第3行开始：【强制优先执行】API接口逻辑 =================
+# 检测API上传请求（任何其他代码都不能放在这前面）
 if "upload_code" in st.query_params and "auth_key" in st.query_params:
     # 必须和刷码工具里的密钥完全一致
     AUTH_KEY = "my_boss_code_secret_2026"
@@ -27,7 +24,7 @@ if "upload_code" in st.query_params and "auth_key" in st.query_params:
         st.write("API_ERROR_INVALID_CODE")
         st.stop()
     
-    # 写入数据库（需要的时候再import，避免提前初始化干扰）
+    # 写入数据库
     try:
         import sqlite3
         conn = sqlite3.connect("boss_code_system.db", check_same_thread=False)
@@ -42,10 +39,15 @@ if "upload_code" in st.query_params and "auth_key" in st.query_params:
     
     # 处理完API直接停止，绝对不渲染网页内容
     st.stop()
-except:
-    pass
 
-# -------------------------- 2. Cookie管理器初始化 --------------------------
+# ================= 【API逻辑之后，才能放其他所有代码】 =================
+import sqlite3
+import random
+import pandas as pd
+from datetime import datetime, timedelta
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# -------------------------- Cookie管理器初始化 --------------------------
 cookies = EncryptedCookieManager(
     prefix="boss_code_final_v3_",
     password="final_secure_pwd_v3_987654"
@@ -53,8 +55,7 @@ cookies = EncryptedCookieManager(
 if not cookies.ready():
     st.stop()
 
-
-# -------------------------- 4. 数据库初始化 --------------------------
+# -------------------------- 数据库初始化 --------------------------
 def init_db():
     conn = sqlite3.connect("boss_code_system.db", check_same_thread=False)
     c = conn.cursor()
@@ -138,7 +139,7 @@ def daily_reset_if_needed(user_id):
         c.execute("UPDATE users SET remain_receive_times=daily_quota, last_reset_date=? WHERE id=?", (today, user_id))
         conn.commit()
 
-# -------------------------- 5. 登录状态初始化 --------------------------
+# -------------------------- 登录状态初始化 --------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = 0
@@ -146,7 +147,7 @@ if "logged_in" not in st.session_state:
     st.session_state.permission_level = 0
     st.session_state.force_logout = False
 
-# 从Cookie同步登录状态（force_logout时跳过，防止cookie恢复登录）
+# 从Cookie同步登录状态
 if not st.session_state.logged_in and not st.session_state.get("force_logout"):
     if cookies.get("user_id") and cookies.get("username") and cookies.get("permission_level"):
         st.session_state.logged_in = True
@@ -158,11 +159,11 @@ if not st.session_state.logged_in and not st.session_state.get("force_logout"):
 if st.session_state.logged_in:
     daily_reset_if_needed(st.session_state.user_id)
 
-# -------------------------- 6. 页面标题 --------------------------
+# -------------------------- 页面标题 --------------------------
 st.title("🎮 Boss码自助领取系统")
 
-# -------------------------- 7. 渲染分支：要么登录页，要么已登录页，无中间状态 --------------------------
-# 未登录状态：只渲染登录/注册/忘记密码
+# -------------------------- 渲染分支：要么登录页，要么已登录页 --------------------------
+# 未登录状态
 if not st.session_state.logged_in:
     tab1, tab2, tab3 = st.tabs(["用户登录", "账号注册", "忘记密码"])
     
@@ -239,9 +240,9 @@ if not st.session_state.logged_in:
                     conn.commit()
                     st.success(f"用户【{reset_username}】的密码重置成功！请返回登录页使用新密码登录")
 
-# 已登录状态：只渲染系统内容
+# 已登录状态
 else:
-    # 顶部用户信息 + 退出按钮（核心：点击直接改URL参数，强制触发退出）
+    # 顶部用户信息 + 退出按钮
     col1, col2 = st.columns([8, 2])
     with col1:
         role = "超级管理员" if st.session_state.permission_level == 2 else "次级管理员" if st.session_state.permission_level == 1 else "普通用户"
@@ -261,7 +262,7 @@ else:
     # 管理员后台
     if st.session_state.permission_level >= 1:
         tabs = st.tabs(["Boss码管理", "用户管理", "领取记录", "库存统计"] + (["权限设置"] if st.session_state.permission_level == 2 else []))
-
+        
         # ========== Boss码管理 ==========
         with tabs[0]:
             # TXT文件上传导入
@@ -283,7 +284,7 @@ else:
                     st.success(f"导入完成！\n有效码总数：{len(codes)}\n成功导入：{ok}个\n重复跳过：{dup}个")
                     with st.expander("查看解析到的Boss码", expanded=False):
                         st.code("\n".join(codes), language="text")
-
+            
             st.divider()
 
             # 手动粘贴导入
@@ -309,7 +310,7 @@ else:
                         st.success(f"导入完成！\n有效码总数：{len(codes)}\n成功导入：{ok}个\n重复跳过：{dup}个")
                         with st.expander("查看解析到的Boss码", expanded=False):
                             st.code("\n".join(codes), language="text")
-
+            
             st.divider()
 
             # Boss码删除管理
@@ -352,21 +353,21 @@ else:
                             c.execute("DELETE FROM boss_codes WHERE id BETWEEN ? AND ?", (del_start_id, del_end_id))
                             conn.commit()
                             st.success(f"批量删除完成！共删除 {count} 个Boss码")
-
+            
             st.divider()
 
             # Boss码库存列表
             st.subheader("Boss码库存列表")
             c.execute("SELECT id, code, create_time FROM boss_codes ORDER BY id DESC")
             st.dataframe(pd.DataFrame(c.fetchall(), columns=["ID","码","创建时间"]), use_container_width=True, key="code_list_df")
-
+        
         # ========== 用户管理 ==========
         with tabs[1]:
             st.subheader("用户列表")
             c.execute("SELECT id, username, permission_level, remain_receive_times, daily_quota, last_reset_date, create_time FROM users ORDER BY id DESC")
             users = c.fetchall()
             st.dataframe(pd.DataFrame(users, columns=["ID","用户名","权限等级","剩余次数","每日配额","上次重置日期","注册时间"]), use_container_width=True, key="user_list_df")
-
+            
             # 管理员重置用户密码
             if st.session_state.permission_level >= 1:
                 st.divider()
@@ -409,7 +410,7 @@ else:
                                 c.execute("UPDATE users SET password = ? WHERE id = ?", (admin_new_pwd, reset_uid))
                                 conn.commit()
                                 st.success(f"用户【{u[1]}】的密码已重置成功！")
-
+            
             st.divider()
             st.subheader("🔄 重置用户领取次数")
             reset_type = st.radio("选择重置方式", ["单个用户重置", "批量用户重置（按ID范围）"], horizontal=True, key="reset_type")
@@ -449,7 +450,7 @@ else:
                         affected = conn.total_changes
                         conn.commit()
                         st.success(f"批量重置完成！共重置 {affected} 个用户的领取次数为 {reset_batch_times} 次")
-
+            
             st.divider()
             st.subheader("🗑️ 用户删除管理（仅超管）")
             if st.session_state.permission_level == 2:
@@ -506,7 +507,7 @@ else:
                                 """, (del_user_start_id, del_user_end_id))
                                 conn.commit()
                                 st.success(f"批量删除完成！共删除 {count} 个用户，并清理了其所有领取记录")
-
+            
             st.divider()
             st.subheader("📊 批量设置用户领取次数")
             batch_type = st.radio("选择批量方式", ["按用户ID范围", "按用户ID列表"], horizontal=True, key="batch_times_type")
@@ -559,7 +560,7 @@ else:
                             affected = conn.total_changes
                             conn.commit()
                             st.success(f"批量设置完成！共修改 {affected} 个用户的领取次数")
-
+        
         # ========== 领取记录 ==========
         with tabs[2]:
             st.subheader("全量领取记录")
@@ -571,7 +572,7 @@ else:
                 ORDER BY MIN(r.receive_time) DESC
             ''')
             st.dataframe(pd.DataFrame(c.fetchall(), columns=["用户名","码","领取时间"]), use_container_width=True, key="record_list_df")
-
+        
         # ========== 库存统计 ==========
         with tabs[3]:
             c.execute("SELECT COUNT(*) FROM boss_codes")
@@ -583,7 +584,7 @@ else:
             col1.metric("总库存", total)
             col2.metric("剩余可领取", remain)
             col3.metric("已领取", used)
-
+        
         # ========== 权限设置 ==========
         if len(tabs) >= 5:
             with tabs[4]:
@@ -672,4 +673,3 @@ else:
         st.dataframe(pd.DataFrame(my_records, columns=["码","领取时间"]), use_container_width=True, key="my_record_df")
     else:
         st.info("你还没有领取过Boss码")
-
