@@ -1,4 +1,3 @@
 streamlit>=1.28.0
 pandas>=2.0.0
-sqlite3  # 系统自带，无需安装但可声明
 streamlit-cookies-manager>=0.1.0
